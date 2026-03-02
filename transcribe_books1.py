@@ -33,7 +33,7 @@ import tempfile
 #  YOUR SETTINGS - EDIT THESE TWO LINES
 # ============================================================
 
-API_KEY = "fb8ccdc1a46f44cfa31653f609b1dbb7"           # Paste your AssemblyAI API key between the quotes
+API_KEY = "API for AssemplyAI"           # Paste your AssemblyAI API key between the quotes
 AUDIOBOOKS_FOLDER = r"C:\Users\VishalAmin\OneDrive - Wellness House Ltd\Downloads\Books"    # Change this to your folder of MP3 files
 
 # ============================================================
