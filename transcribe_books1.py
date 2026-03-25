@@ -37,7 +37,7 @@ import threading
 #  YOUR SETTINGS - EDIT THESE TWO LINES
 # ============================================================
 
-API_KEY = "YOUR_API_KEY_HERE"           # Paste your AssemblyAI API key between the quotes
+API_KEY = "25cf78096fa44f269cb9535d37f7e93d"           # Paste your AssemblyAI API key between the quotes
 AUDIOBOOKS_FOLDER = r"C:\Audiobooks"    # Change this to your folder of MP3 files
 
 # ============================================================
