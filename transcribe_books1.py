@@ -7,6 +7,9 @@ and saves the text output, ready for NotebookLM.
 Automatically splits files longer than 9 hours into chunks
 to stay within AssemblyAI's 10-hour limit.
 
+Press S at any time to skip the current book.
+Press Q to quit (already-done books are saved).
+
 SETUP (one time):
 1. Install Python from https://www.python.org/downloads/
    (Check "Add Python to PATH" during install!)
@@ -28,19 +31,43 @@ import subprocess
 import json
 import shutil
 import tempfile
+import threading
 
 # ============================================================
 #  YOUR SETTINGS - EDIT THESE TWO LINES
 # ============================================================
 
-API_KEY = "API for AssemplyAI"           # Paste your AssemblyAI API key between the quotes
-AUDIOBOOKS_FOLDER = r"C:\Users\VishalAmin\OneDrive - Wellness House Ltd\Downloads\Books"    # Change this to your folder of MP3 files
+API_KEY = "YOUR_API_KEY_HERE"           # Paste your AssemblyAI API key between the quotes
+AUDIOBOOKS_FOLDER = r"C:\Audiobooks"    # Change this to your folder of MP3 files
 
 # ============================================================
 #  DON'T EDIT BELOW THIS LINE
 # ============================================================
 
 MAX_DURATION_SECONDS = 9 * 3600  # 9 hours (buffer under 10hr limit)
+
+# Global flags for skip/quit
+skip_current = False
+quit_all = False
+
+def start_key_listener():
+    """Listen for S (skip) and Q (quit) keypresses in background."""
+    global skip_current, quit_all
+    try:
+        import msvcrt  # Windows only
+        while not quit_all:
+            if msvcrt.kbhit():
+                key = msvcrt.getch().decode("utf-8", errors="ignore").lower()
+                if key == "s":
+                    skip_current = True
+                    print("\n           >>> SKIPPING this book...")
+                elif key == "q":
+                    quit_all = True
+                    print("\n           >>> QUITTING after current operation...")
+            time.sleep(0.2)
+    except ImportError:
+        # Non-Windows: no skip support, just continue normally
+        pass
 
 def format_time(seconds):
     """Turn seconds into a friendly time string."""
@@ -67,7 +94,7 @@ def get_audio_duration(filepath, ffmpeg_path):
         result = subprocess.run(
             [ffprobe_path, "-v", "quiet", "-print_format", "json",
              "-show_format", filepath],
-            capture_output=True, text=True, timeout=60
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60
         )
         if result.returncode == 0:
             info = json.loads(result.stdout)
@@ -79,7 +106,7 @@ def get_audio_duration(filepath, ffmpeg_path):
     try:
         result = subprocess.run(
             [ffmpeg_path, "-i", filepath],
-            capture_output=True, text=True, timeout=60
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60
         )
         for line in result.stderr.split("\n"):
             if "Duration:" in line:
@@ -100,7 +127,7 @@ def split_audio(filepath, ffmpeg_path, chunk_duration, temp_dir):
             [ffmpeg_path, "-i", filepath, "-f", "segment",
              "-segment_time", str(chunk_duration),
              "-c", "copy", "-y", output_pattern],
-            capture_output=True, text=True, timeout=3600
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3600
         )
         if result.returncode != 0:
             print(f"           ffmpeg error: {result.stderr[:200]}")
@@ -123,7 +150,37 @@ def transcribe_file(filepath, transcriber):
         return None, transcript.error
     return transcript.text, None
 
+def transcribe_in_background(filepath, transcriber, result_holder):
+    """Run transcription in a background thread, storing result in result_holder."""
+    try:
+        text, error = transcribe_file(filepath, transcriber)
+        result_holder["text"] = text
+        result_holder["error"] = error
+    except Exception as e:
+        result_holder["text"] = None
+        result_holder["error"] = str(e)
+    result_holder["done"] = True
+
+def wait_for_transcription(filepath, transcriber):
+    """Transcribe a file while allowing skip/quit."""
+    global skip_current
+    result = {"text": None, "error": None, "done": False}
+
+    thread = threading.Thread(target=transcribe_in_background, args=(filepath, transcriber, result))
+    thread.daemon = True
+    thread.start()
+
+    # Wait for completion, checking for skip/quit
+    while not result["done"]:
+        if skip_current or quit_all:
+            return None, "SKIPPED"
+        time.sleep(0.5)
+
+    return result["text"], result["error"]
+
 def main():
+    global skip_current, quit_all
+
     if API_KEY == "YOUR_API_KEY_HERE":
         print("ERROR: You need to paste your AssemblyAI API key into the script.")
         print("Open this file in Notepad and replace YOUR_API_KEY_HERE with your key.")
@@ -168,8 +225,9 @@ def main():
     print("=" * 60)
     print(f"\n  Found {len(audio_files)} audio file(s)")
     print(f"  ffmpeg: {'Found' if ffmpeg_path else 'NOT FOUND (long files may fail)'}")
-    print(f"  Transcripts will be saved to: {output_folder}\n")
-    print("=" * 60)
+    print(f"  Transcripts will be saved to: {output_folder}")
+    print(f"\n  Press S to skip a book | Press Q to quit")
+    print("\n" + "=" * 60)
 
     already_done = []
     to_process = []
@@ -193,10 +251,22 @@ def main():
 
     print(f"\n  Transcribing {len(to_process)} file(s)...\n")
 
+    # Start keyboard listener in background
+    listener = threading.Thread(target=start_key_listener, daemon=True)
+    listener.start()
+
     successful = 0
     failed = 0
+    skipped = 0
 
     for i, filename in enumerate(to_process, 1):
+        if quit_all:
+            print(f"\n  Quitting early. Remaining {len(to_process) - i + 1} books skipped.")
+            break
+
+        # Reset skip flag for each new book
+        skip_current = False
+
         filepath = os.path.join(AUDIOBOOKS_FOLDER, filename)
         name_without_ext = os.path.splitext(filename)[0]
         output_path = os.path.join(output_folder, f"{name_without_ext}.txt")
@@ -214,6 +284,11 @@ def main():
                     needs_splitting = True
                     print(f"           Longer than 9 hours - splitting into chunks")
 
+        if skip_current:
+            print(f"           SKIPPED")
+            skipped += 1
+            continue
+
         start_time = time.time()
 
         try:
@@ -222,6 +297,11 @@ def main():
                 try:
                     print(f"           Splitting...")
                     chunks = split_audio(filepath, ffmpeg_path, MAX_DURATION_SECONDS, temp_dir)
+
+                    if skip_current:
+                        print(f"           SKIPPED")
+                        skipped += 1
+                        continue
 
                     if not chunks:
                         print(f"           ERROR: Failed to split file")
@@ -232,12 +312,21 @@ def main():
                     all_text = []
 
                     for ci, chunk_path in enumerate(chunks, 1):
+                        if skip_current or quit_all:
+                            break
                         print(f"           Transcribing chunk {ci}/{len(chunks)}...")
-                        text, error = transcribe_file(chunk_path, transcriber)
+                        text, error = wait_for_transcription(chunk_path, transcriber)
+                        if skip_current or error == "SKIPPED":
+                            break
                         if error:
                             print(f"           ERROR on chunk {ci}: {error}")
                         elif text:
                             all_text.append(text)
+
+                    if skip_current:
+                        print(f"           SKIPPED")
+                        skipped += 1
+                        continue
 
                     if all_text:
                         with open(output_path, "w", encoding="utf-8") as f:
@@ -256,7 +345,12 @@ def main():
 
             else:
                 print(f"           Uploading and transcribing... (this may take a while)")
-                text, error = transcribe_file(filepath, transcriber)
+                text, error = wait_for_transcription(filepath, transcriber)
+
+                if skip_current or error == "SKIPPED":
+                    print(f"           SKIPPED")
+                    skipped += 1
+                    continue
 
                 if error:
                     print(f"           ERROR: {error}")
@@ -276,9 +370,14 @@ def main():
             print(f"           ERROR: {e}")
             failed += 1
 
+    # Stop listener
+    quit_all = True
+
     print("\n" + "=" * 60)
     print("  ALL DONE!")
     print(f"  Successful: {successful}")
+    if skipped:
+        print(f"  Skipped: {skipped}")
     if failed:
         print(f"  Failed: {failed}")
     print(f"\n  Transcripts saved in: {output_folder}")
